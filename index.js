@@ -10,13 +10,14 @@ app.use(express.json());
 
 const upload = multer({ dest: "uploads/" });
 
-// Função segura para não quebrar o servidor se o Lovable mandar lixo no JSON
 const parseSafeJSON = (data) => {
-  try {
-    return data ? JSON.parse(data) : {};
-  } catch (e) {
-    return {};
-  }
+  try { return data ? JSON.parse(data) : {}; } 
+  catch (e) { return {}; }
+};
+
+const makeEven = (num) => {
+  let n = Math.round(Number(num) || 0);
+  return n % 2 === 0 ? n : n + 1;
 };
 
 app.post(
@@ -27,93 +28,80 @@ app.post(
   ]),
   (req, res) => {
     try {
-      console.log("===== INICIANDO NOVO RENDER =====");
-
       const baseFile = req.files?.["baseVideo"]?.[0];
       const reactFile = req.files?.["reactionVideo"]?.[0];
 
-      if (!baseFile || !reactFile) {
-        return res.status(400).send("Faltando arquivos de vídeo.");
-      }
+      if (!baseFile || !reactFile) return res.status(400).send("Arquivos ausentes.");
 
       const basePath = baseFile.path;
       const reactPath = reactFile.path;
       const outputPath = `output_${Date.now()}.mp4`;
 
-      // 1. Extraindo dados
       const textObj = parseSafeJSON(req.body.text);
       const reactObj = parseSafeJSON(req.body.react);
+      const baseObj = parseSafeJSON(req.body.base);
 
       const CANVAS_W = 720;
       const CANVAS_H = 1280;
-
-      // 2. SAFE PARSER: Coordenadas do React (Blindado contra Zero e Ímpares)
-      let reactW = Math.round(Number(reactObj.w));
-      let reactH = Math.round(Number(reactObj.h));
-
-      // Se a largura/altura vier 0, negativa ou muito pequena, força o padrão
-      if (!reactW || reactW < 10) reactW = 300;
-      if (!reactH || reactH < 10) reactH = 400;
-
-      // FFmpeg exige números PARES para resolução. Se for ímpar, soma 1.
-      reactW = reactW % 2 === 0 ? reactW : reactW + 1;
-      reactH = reactH % 2 === 0 ? reactH : reactH + 1;
-
-      let reactX = Math.round(Number(reactObj.x));
-      let reactY = Math.round(Number(reactObj.y));
       
-      // Se não mandar o X ou Y, joga pro meio da tela
-      if (isNaN(reactX)) reactX = Math.round((CANVAS_W - reactW) / 2);
-      if (isNaN(reactY)) reactY = 100;
+      // Proporção de 1/3 da tela para o React (1280 / 3 = ~426)
+      const ONE_THIRD_H = 426; 
 
-      // 3. SAFE PARSER: Texto
-      const rawText = textObj.value || "";
-      const textVal = rawText.replace(/'/g, "\u2019").replace(/:/g, "\\:");
-      
-      let textX = Math.round(Number(textObj.x));
-      let textY = Math.round(Number(textObj.y));
-      let textSize = Math.round(Number(textObj.size));
+      // 1. Coordenadas do React (Liv)
+      let reactW = makeEven(reactObj.w || CANVAS_W);
+      // Se não vier altura, ou se vier algo maior que a metade, força para 1/3 (se for layout do topo/baixo)
+      let reactH = makeEven(reactObj.h || ONE_THIRD_H);
+      let reactX = Math.round(reactObj.x || 0);
+      let reactY = Math.round(reactObj.y || 0);
 
-      if (isNaN(textX)) textX = 50;
-      if (isNaN(textY)) textY = 600;
-      if (!textSize || textSize < 10) textSize = 48;
+      // 2. Coordenadas do Vídeo Principal (Dragão)
+      let baseW = makeEven(baseObj.w || CANVAS_W);
+      // Ocupa o restante da tela (1280 - altura do react)
+      let baseH = makeEven(baseObj.h || (CANVAS_H - reactH));
+      let baseX = Math.round(baseObj.x || 0);
+      let baseY = Math.round(baseObj.y || 0);
 
-      // 4. Montando o Canvas
-      const videoFilters = `[0:v]scale=${CANVAS_W}:${CANVAS_H}:force_original_aspect_ratio=increase,crop=${CANVAS_W}:${CANVAS_H}[base_scaled];[1:v]scale=${reactW}:${reactH}:force_original_aspect_ratio=increase,crop=${reactW}:${reactH}[react_scaled];color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];[bg][base_scaled]overlay=0:0:shortest=1[bg_base];[bg_base][react_scaled]overlay=${reactX}:${reactY}[vid_both];[vid_both]drawtext=text='${textVal}':x=${textX}:y=${textY}:fontsize=${textSize}:fontcolor=white:borderw=3:bordercolor=black[final]`;
+      // 3. Texto
+      const textVal = (textObj.value || "").replace(/'/g, "\u2019").replace(/:/g, "\\:");
+      let textX = textObj.x !== undefined ? Math.round(textObj.x) : "(w-text_w)/2";
+      // Centraliza na linha de divisão se for Split Screen
+      let textY = textObj.y !== undefined ? Math.round(textObj.y) : reactH - 30;
+      let textSize = Math.round(textObj.size || 50);
 
-      // 5. Comando de Render
+      // 4. Filtro FFmpeg Universal COM CROP CENTRALIZADO EXATO
+      // Adicionado (in_w-out_w)/2:(in_h-out_h)/2 para garantir que o rosto fique no meio e as sobras sejam cortadas igualmente.
+      const videoFilters = `
+        color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];
+        [0:v]scale=${baseW}:${baseH}:force_original_aspect_ratio=increase,crop=${baseW}:${baseH}:(in_w-${baseW})/2:(in_h-${baseH})/2[base_scaled];
+        [1:v]scale=${reactW}:${reactH}:force_original_aspect_ratio=increase,crop=${reactW}:${reactH}:(in_w-${reactW})/2:(in_h-${reactH})/2[react_scaled];
+        [bg][base_scaled]overlay=${baseX}:${baseY}:shortest=1[bg_base];
+        [bg_base][react_scaled]overlay=${reactX}:${reactY}[vid_both];
+        [vid_both]drawtext=text='${textVal}':x=${textX}:y=${textY}:fontsize=${textSize}:fontcolor=white:borderw=4:bordercolor=black[final]
+      `.replace(/\s+/g, '');
+
       const command = `ffmpeg -y -threads 2 -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset veryfast -crf 28 -shortest -c:a aac "${outputPath}"`;
 
-      console.log(`FFmpeg gerando: React[${reactW}x${reactH} at ${reactX},${reactY}]`);
+      console.log(`Render -> Base: ${baseW}x${baseH} | React: ${reactW}x${reactH}`);
 
       exec(command, (error, stdout, stderr) => {
         if (error) {
-          console.error("===== ERRO NO FFMPEG =====");
           console.error(stderr);
-          return res.status(500).send("Erro ao gerar vídeo. Verifique os logs do Render.");
+          return res.status(500).send("Erro no FFmpeg.");
         }
-
-        console.log("Render finalizado!");
-
         res.download(outputPath, () => {
           try {
             fs.unlinkSync(basePath);
             fs.unlinkSync(reactPath);
             fs.unlinkSync(outputPath);
-          } catch (e) {
-            console.error("Cleanup error:", e);
-          }
+          } catch (e) {}
         });
       });
 
     } catch (err) {
-      console.error("ERRO GERAL:", err);
-      res.status(500).send("Erro interno");
+      res.status(500).send("Erro interno.");
     }
   }
 );
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Servidor rodando na porta " + PORT);
-});
+app.listen(PORT, () => console.log("Servidor Online."));
