@@ -30,7 +30,7 @@ const makeEven = (num) => {
   return n % 2 === 0 ? n : n + 1;
 };
 
-// Quebra de linha a cada 2 palavras
+// 🔥 NOVO: Função que quebra o texto a cada 2 palavras para evitar corte na tela
 const formatTextToMultiline = (text, wordsPerLine = 2) => {
   if (!text) return "";
   const words = text.trim().split(/\s+/);
@@ -38,10 +38,11 @@ const formatTextToMultiline = (text, wordsPerLine = 2) => {
   for (let i = 0; i < words.length; i += wordsPerLine) {
     lines.push(words.slice(i, i + wordsPerLine).join(" "));
   }
+  // O "\n" representa o "Enter" (quebra de linha) no arquivo de texto
   return lines.join("\n");
 };
 
-// --- ROTA 1: DOWNLOAD DIRETO DO INSTAGRAM ---
+// --- ROTA 1: DOWNLOAD DO INSTAGRAM ---
 app.post("/api/download-instagram", async (req, res) => {
   const { url } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN; 
@@ -78,7 +79,7 @@ app.post("/api/download-instagram", async (req, res) => {
   }
 });
 
-// --- ROTA 2: RENDERIZAÇÃO FINAL (BLINDADA CONTRA TELA PRETA E ZOOM) ---
+// --- ROTA 2: RENDERIZAÇÃO FINAL COM CROP DE TEMPO E TEXTO MULTILINHA ---
 app.post(
   "/api/render-video",
   upload.fields([
@@ -87,7 +88,7 @@ app.post(
   ]),
   (req, res) => {
     try {
-      console.log("🎬 Renderizando com Trava Matemática Antizoom...");
+      console.log("🎬 Iniciando exportação com texto ajustado...");
 
       const baseObj = parseSafeJSON(req.body.base);
       const reactObj = parseSafeJSON(req.body.react);
@@ -109,59 +110,42 @@ app.post(
       const outputPath = path.join(uploadDir, `output_${Date.now()}.mp4`);
       const textPath = path.join(uploadDir, `text_${Date.now()}.txt`);
 
-      const formattedText = formatTextToMultiline(textObj.value || "", 2);
+      // 🔥 MÁGICA ACONTECENDO AQUI: Processamos o texto antes de salvar
+      const rawText = textObj.value || "";
+      const formattedText = formatTextToMultiline(rawText, 2); // Quebra a cada 2 palavras
+      
       fs.writeFileSync(textPath, formattedText, "utf8");
 
       const CANVAS_W = 720;
       const CANVAS_H = 1280;
 
-      // 🛡️ TRAVA DE SEGURANÇA 1: Garante que a escala nunca seja "NaN"
-      let eW = parseFloat(req.body.editorW);
-      let eH = parseFloat(req.body.editorH);
-      let scaleX = (eW > 0) ? (CANVAS_W / eW) : 2;
-      let scaleY = (eH > 0) ? (CANVAS_H / eH) : 2;
+      let scaleX = 1, scaleY = 1;
+      if (req.body.editorW && req.body.editorH) {
+        scaleX = CANVAS_W / Number(req.body.editorW);
+        scaleY = CANVAS_H / Number(req.body.editorH);
+      } else { scaleX = 2; scaleY = 2; }
 
-      // 🛡️ TRAVA DE SEGURANÇA 2: Garante larguras e posições sempre numéricas
-      let baseW = parseFloat(baseObj.w);
-      let bW = makeEven((!isNaN(baseW) ? baseW : 360) * scaleX);
-      let baseX = parseFloat(baseObj.x);
-      let bX = Math.round((!isNaN(baseX) ? baseX : 0) * scaleX);
-      let baseY = parseFloat(baseObj.y);
-      let bY = Math.round((!isNaN(baseY) ? baseY : 0) * scaleY);
+      let bW = makeEven((baseObj.w || 360) * scaleX);
+      let bH = makeEven((baseObj.h || 640) * scaleY);
+      let bX = Math.round((baseObj.x || 0) * scaleX);
+      let bY = Math.round((baseObj.y || 0) * scaleY);
 
-      let reactW = parseFloat(reactObj.w);
-      let rW = makeEven((!isNaN(reactW) ? reactW : 360) * scaleX);
-      let reactX = parseFloat(reactObj.x);
-      let rX = Math.round((!isNaN(reactX) ? reactX : 0) * scaleX);
-      let reactY = parseFloat(reactObj.y);
-      let rY = Math.round((!isNaN(reactY) ? reactY : 0) * scaleY);
+      let rW = makeEven((reactObj.w || 360) * scaleX);
+      let rH = makeEven((reactObj.h || 240) * scaleY);
+      let rX = Math.round((reactObj.x || 0) * scaleX);
+      let rY = Math.round((reactObj.y || 0) * scaleY);
 
-      let textX = parseFloat(textObj.x);
-      let tX = !isNaN(textX) ? Math.round(textX * scaleX) : "(w-text_w)/2";
-      let textY = parseFloat(textObj.y);
-      let tY = !isNaN(textY) ? Math.round(textY * scaleY) : 600;
-      let textSize = parseFloat(textObj.size);
-      let tS = Math.round((!isNaN(textSize) ? textSize : 35) * ((scaleX + scaleY) / 2));
+      let tX = textObj.x !== undefined ? Math.round(textObj.x * scaleX) : "(w-text_w)/2";
+      let tY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : 600;
+      let tS = Math.round((textObj.size || 35) * ((scaleX + scaleY) / 2));
 
-      // 🎥 FILTRO MÁGICO SIMPLIFICADO: 
-      // Em vez de 'pad' ou 'crop', usamos apenas 'scale=LARGURA:-1'. 
-      // Isso amarra a largura ao tamanho da tela e ajusta a altura automaticamente, matando o zoom bizarro.
-      const videoFilters = [
-        `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg]`,
-        `[0:v]scale=${bW}:-1[base_scaled]`,
-        `[1:v]scale=${rW}:-1[react_scaled]`,
-        `[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base]`,
-        `[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both]`,
-        `[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`
-      ].join(";");
+      // Filtro do FFmpeg
+      const videoFilters = `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled];[1:v]scale=${rW}:${rH}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled];[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base];[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both];[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`.replace(/\s+/g, "");
 
       const command = `ffmpeg -y -threads 2 -ss ${startTime} -t ${duration} -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset veryfast -crf 28 -shortest -c:a aac "${outputPath}"`;
 
       exec(command, (error, stdout, stderr) => {
-        if (error) {
-          console.error("Erro no FFmpeg:", stderr);
-          return res.status(500).send("Erro no FFmpeg.");
-        }
+        if (error) return res.status(500).send("Erro no FFmpeg.");
         res.download(outputPath, () => {
           try {
             if (fs.existsSync(reactPath)) fs.unlinkSync(reactPath);
@@ -170,12 +154,9 @@ app.post(
           } catch (e) {}
         });
       });
-    } catch (err) { 
-      console.error(err);
-      res.status(500).send("Erro interno."); 
-    }
+    } catch (err) { res.status(500).send("Erro interno."); }
   }
 );
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Motor Blindado online na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Reactify online na porta ${PORT}`));
