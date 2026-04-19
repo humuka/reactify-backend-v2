@@ -78,7 +78,7 @@ app.post("/api/download-instagram", async (req, res) => {
   }
 });
 
-// --- ROTA 2: RENDERIZAÇÃO FINAL COM CROP, POSIÇÃO EXACTA E SEM ZOOM ---
+// --- ROTA 2: RENDERIZAÇÃO FINAL COM CROP E POSIÇÃO EXACTA ---
 app.post(
   "/api/render-video",
   upload.fields([
@@ -133,7 +133,7 @@ app.post(
       let bX = Math.round((baseObj.x || 0) * scaleX);
       let bY = Math.round((baseObj.y || 0) * scaleY);
 
-      // 📍 LARGURA, ALTURA, X E Y DA REAÇÃO (LIV FERREIRA)
+      // 📍 LARGURA, ALTURA, X E Y DA REAÇÃO
       let rW = makeEven((reactObj.w || 360) * scaleX);
       let rH = makeEven((reactObj.h || 240) * scaleY);
       let rX = Math.round((reactObj.x || 0) * scaleX);
@@ -144,11 +144,38 @@ app.post(
       let tY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : 600;
       let tS = Math.round((textObj.size || 35) * ((scaleX + scaleY) / 2));
 
-      // 🎥 O FILTRO MÁGICO: Usa "decrease" e "pad" para espelhar o CSS "object-fit: contain", evitando zoom
+      // 🎥 O FILTRO MÁGICO
       const videoFilters = [
         `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg]`,
         `[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=decrease,pad=${bW}:${bH}:(ow-iw)/2:(oh-ih)/2:color=black[base_scaled]`,
         `[1:v]scale=${rW}:${rH}:force_original_aspect_ratio=decrease,pad=${rW}:${rH}:(ow-iw)/2:(oh-ih)/2:color=black[react_scaled]`,
         `[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base]`,
         `[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both]`,
-        `[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white
+        `[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`
+      ].join(";");
+
+      const command = `ffmpeg -y -threads 2 -ss ${startTime} -t ${duration} -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset veryfast -crf 28 -shortest -c:a aac "${outputPath}"`;
+
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          console.error("Erro no FFmpeg:", stderr);
+          return res.status(500).send("Erro no FFmpeg.");
+        }
+        res.download(outputPath, () => {
+          // Limpeza do servidor para não lotar o disco
+          try {
+            if (fs.existsSync(reactPath)) fs.unlinkSync(reactPath);
+            if (fs.existsSync(textPath)) fs.unlinkSync(textPath);
+            if (!baseVideoName && fs.existsSync(basePath)) fs.unlinkSync(basePath);
+          } catch (e) {}
+        });
+      });
+    } catch (err) { 
+      console.error(err);
+      res.status(500).send("Erro interno."); 
+    }
+  }
+);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Reactify Motor V2 online na porta ${PORT}`));
