@@ -47,13 +47,6 @@ app.post(
       const CANVAS_W = 720;
       const CANVAS_H = 1280;
 
-      // 🔍 DEBUG LOGS (Importante ver no Render!)
-      console.log("DADOS RECEBIDOS:", { 
-        editorW: req.body.editorW, 
-        editorH: req.body.editorH,
-        text: textObj.value 
-      });
-
       let scaleX = 1;
       let scaleY = 1;
 
@@ -61,34 +54,34 @@ app.post(
         scaleX = CANVAS_W / Number(req.body.editorW);
         scaleY = CANVAS_H / Number(req.body.editorH);
       } else {
-        console.log("⚠️ AVISO: Usando medidas de EMERGÊNCIA (Lovable não enviou editorW/H)");
-        scaleX = 2; // Assumindo que o editor tem 360px
+        scaleX = 2; 
         scaleY = 2;
       }
 
-      // 1. Cálculos de Medida com 2% de ZOOM (Sangramento) para matar bordas
-      const BLEED = 1.02; 
+      // 1. Configuração do Vídeo Base (Fundo)
+      // Se o usuário quer o fundo aparecendo inteiro, o Lovable deve mandar w:720 h:1280
+      let bW = makeEven((baseObj.w || 360) * scaleX);
+      let bH = makeEven((baseObj.h || 640) * scaleX); // Mantém proporção
+      let bX = Math.round((baseObj.x || 0) * scaleX);
+      let bY = Math.round((baseObj.y || 0) * scaleY);
 
+      // 2. Configuração do Vídeo React (Liv)
       let rW = makeEven((reactObj.w || 360) * scaleX);
-      let rH = makeEven((reactObj.h || 200) * scaleY);
+      let rH = makeEven((reactObj.h || 240) * scaleY);
       let rX = Math.round((reactObj.x || 0) * scaleX);
       let rY = Math.round((reactObj.y || 0) * scaleY);
 
-      let bW = makeEven((baseObj.w || 360) * scaleX);
-      let bH = makeEven((baseObj.h || 440) * scaleY);
-      let bX = Math.round((baseObj.x || 0) * scaleX);
-      let bY = Math.round((baseObj.y || 200) * scaleY);
-
-      // 2. Texto
+      // 3. Texto
       let tX = textObj.x !== undefined ? Math.round(textObj.x * scaleX) : "(w-text_w)/2";
       let tY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : 600;
       let tS = Math.round((textObj.size || 30) * ((scaleX + scaleY) / 2));
 
-      // 3. FILTRO COM ZOOM: escalamos um pouco mais e cortamos no tamanho certo
+      // 4. Filtro FFmpeg de Camadas
+      // O segredo é que o [base_scaled] agora não é cortado de forma restritiva
       const videoFilters = `
         color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];
-        [0:v]scale=${makeEven(bW*BLEED)}:${makeEven(bH*BLEED)}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled];
-        [1:v]scale=${makeEven(rW*BLEED)}:${makeEven(rH*BLEED)}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled];
+        [0:v]scale=${bW}:${bH}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled];
+        [1:v]scale=${rW}:${rH}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled];
         [bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base];
         [bg_base][react_scaled]overlay=${rX}:${rY}[vid_both];
         [vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]
