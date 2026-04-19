@@ -71,7 +71,7 @@ app.post("/api/download-instagram", async (req, res) => {
   } catch (error) { res.status(500).send("Erro no download."); }
 });
 
-// --- ROTA 2: RENDERIZAÇÃO (CLÁSSICA + PROTEÇÃO) ---
+// --- ROTA 2: RENDERIZAÇÃO (CLÁSSICA + PROTEÇÃO TOTAL) ---
 app.post(
   "/api/render-video",
   upload.fields([{ name: "baseVideo", maxCount: 1 }, { name: "reactionVideo", maxCount: 1 }]),
@@ -116,7 +116,7 @@ app.post(
       const tX = !isNaN(parseFloat(textObj.x)) ? Math.round(parseFloat(textObj.x) * sX) : "(w-text_w)/2";
       const tY = !isNaN(parseFloat(textObj.y)) ? Math.round(parseFloat(textObj.y) * sY) : 600;
 
-      // 🔥 AQUI ESTÁ A CORREÇÃO: Array dividido em múltiplas linhas
+      // Filtros quebrados em várias linhas curtas para evitar o corte do editor
       const videoFilters = [
         `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg]`,
         `[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled]`,
@@ -126,4 +126,39 @@ app.post(
         `[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`
       ].join(";");
 
-      const cmd = `ffmpeg -y -ss ${req.body.startTime || 0} -t 10.5 -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset superfast -crf 28 -c
+      // 🔥 NOVA CORREÇÃO: O comando FFmpeg inteiro foi quebrado em pequenas linhas!
+      const cmdArray = [
+        "ffmpeg -y",
+        `-ss ${req.body.startTime || 0}`,
+        "-t 10.5",
+        `-i "${basePath}"`,
+        `-i "${reactPath}"`,
+        `-filter_complex "${videoFilters}"`,
+        `-map "[final]"`,
+        `-map "0:a?"`,
+        `-map "1:a?"`,
+        `-c:v libx264`,
+        `-preset superfast`,
+        `-crf 28`,
+        `-c:a aac`,
+        `"${outputPath}"`
+      ];
+      
+      // Junta as pequenas linhas com um espaço entre elas
+      const cmd = cmdArray.join(" ");
+
+      exec(cmd, (err) => {
+        if (err) return res.status(500).send("Erro FFmpeg.");
+        res.download(outputPath, () => {
+          try {
+            if (fs.existsSync(reactPath)) fs.unlinkSync(reactPath);
+            if (fs.existsSync(textPath)) fs.unlinkSync(textPath);
+          } catch (e) {}
+        });
+      });
+    } catch (e) { res.status(500).send("Erro interno."); }
+  }
+);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Motor Clássico Blindado na porta ${PORT}`));
