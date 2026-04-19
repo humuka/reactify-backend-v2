@@ -66,7 +66,7 @@ app.post("/api/download-instagram", async (req, res) => {
   }
 });
 
-// --- ROTA 2: PESQUISA DE VÍDEOS EM ALTA (OTIMIZADA) ---
+// --- ROTA 2: PESQUISA DE VÍDEOS EM ALTA (REDE GIGANTE) ---
 app.post("/api/search-instagram", async (req, res) => {
   const { keyword } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN;
@@ -75,27 +75,26 @@ app.post("/api/search-instagram", async (req, res) => {
   if (!APIFY_TOKEN) return res.status(500).send("Token do Apify ausente.");
 
   try {
-    // Limpa a palavra: remove espaços e o símbolo de hashtag se o usuário colocar
     const safeKeyword = keyword.replace(/[#\s]+/g, ''); 
-    console.log(`🔍 Pesquisando tendências para a hashtag: #${safeKeyword}...`);
+    console.log(`🔍 Pesquisando tendências para a hashtag: #${safeKeyword}... Jogando a rede gigante!`);
     
-    // Aumentamos o timeout para 120s porque busca de hashtag demora mais que link direto
-    const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=120`;
+    // Timeout estendido para 180s para dar tempo do Apify baixar 100 posts
+    const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=180`;
 
     const apifyRes = await axios.post(apifyUrl, {
       "search": safeKeyword,
       "searchType": "hashtag",
-      "searchLimit": 30 // Puxamos 30 posts para ter certeza que virão vídeos no meio
+      "searchLimit": 100 // 🔥 O SEGREDO: Puxamos 100 posts para ter certeza absoluta que virão vídeos
     });
 
     console.log(`✅ Apify retornou ${apifyRes.data?.length || 0} posts brutos.`);
 
     if (!apifyRes.data || apifyRes.data.length === 0) {
       console.error("❌ O Apify não achou NADA com essa hashtag.");
-      return res.status(404).send("Nenhum post encontrado. Tente um tema mais popular (ex: futebol).");
+      return res.status(404).send("Nenhum post encontrado. Tente um tema mais popular.");
     }
 
-    // Filtro agressivo para pegar SÓ vídeos (Reels)
+    // Garimpo final: Filtra agressivamente pegando SÓ os vídeos e limita a 6
     const videos = apifyRes.data
       .filter(item => item.isVideo === true || item.videoUrl || item.type === "Video")
       .slice(0, 6)
@@ -109,15 +108,15 @@ app.post("/api/search-instagram", async (req, res) => {
         caption: item.caption ? item.caption.substring(0, 70) + '...' : ''
       }));
 
-    console.log(`🎬 Dos posts, ${videos.length} eram vídeos válidos.`);
+    console.log(`🎬 Dos 100 posts, ${videos.length} eram vídeos válidos e separamos os 6 melhores.`);
 
     if (videos.length === 0) {
-      return res.status(404).send("Achamos posts, mas nenhum era vídeo. Tente outra palavra.");
+      return res.status(404).send("Buscamos 100 posts, mas incrivelmente nenhum era vídeo. Tente outra palavra.");
     }
 
     res.json({ success: true, results: videos });
   } catch (error) {
-    console.error("❌ Erro na busca:", error.response ? error.response.data : error.message);
+    console.error("❌ Erro na busca:", error.message);
     res.status(500).send("Erro na comunicação com o servidor de busca.");
   }
 });
