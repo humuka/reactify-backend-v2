@@ -11,10 +11,6 @@ app.use(express.json());
 
 const upload = multer({ dest: "uploads/" });
 
-if (!fs.existsSync("uploads")) {
-  fs.mkdirSync("uploads");
-}
-
 const parseSafeJSON = (data) => {
   try { return data ? JSON.parse(data) : {}; } 
   catch (e) { return {}; }
@@ -25,9 +21,6 @@ const makeEven = (num) => {
   return n % 2 === 0 ? n : n + 1;
 };
 
-// Função auxiliar para sanitizar caminhos de arquivo no Linux do Render
-const sanitizePath = (p) => p.replace(/\\/g, "/");
-
 app.post(
   "/api/render-video",
   upload.fields([
@@ -36,125 +29,92 @@ app.post(
   ]),
   (req, res) => {
     try {
-      console.log("===== INICIANDO NOVO RENDER =====");
-
       const baseFile = req.files?.["baseVideo"]?.[0];
       const reactFile = req.files?.["reactionVideo"]?.[0];
-
-      if (!baseFile || !reactFile) {
-        return res.status(400).send("Faltando arquivos de vídeo.");
-      }
+      if (!baseFile || !reactFile) return res.status(400).send("Arquivos ausentes.");
 
       const basePath = baseFile.path;
       const reactPath = reactFile.path;
       const outputPath = path.resolve(__dirname, "uploads", `output_${Date.now()}.mp4`);
-      
-      // Arquivo temporário para garantir que o texto respeite as quebras de linha (\n)
       const textPath = path.resolve(__dirname, "uploads", `text_${Date.now()}.txt`);
 
       const textObj = parseSafeJSON(req.body.text);
       const reactObj = parseSafeJSON(req.body.react);
       const baseObj = parseSafeJSON(req.body.base);
 
-      // Salva o texto cru no arquivo (preservando enters e formatação)
       fs.writeFileSync(textPath, textObj.value || "");
 
       const CANVAS_W = 720;
       const CANVAS_H = 1280;
 
-      // ESCALA AUTOMÁTICA NO BACKEND (Simplifica o Lovable)
+      // 🔍 DEBUG LOGS (Importante ver no Render!)
+      console.log("DADOS RECEBIDOS:", { 
+        editorW: req.body.editorW, 
+        editorH: req.body.editorH,
+        text: textObj.value 
+      });
+
       let scaleX = 1;
       let scaleY = 1;
-      let avgScale = 1;
 
-      // O Lovable deve enviar 'editorW' e 'editorH' (tamanho da div do editor na tela)
       if (req.body.editorW && req.body.editorH) {
         scaleX = CANVAS_W / Number(req.body.editorW);
         scaleY = CANVAS_H / Number(req.body.editorH);
-        avgScale = (scaleX + scaleY) / 2;
+      } else {
+        console.log("⚠️ AVISO: Usando medidas de EMERGÊNCIA (Lovable não enviou editorW/H)");
+        scaleX = 2; // Assumindo que o editor tem 360px
+        scaleY = 2;
       }
 
-      // 1. Aplica escala no React (Liv)
-      let reactW = makeEven((reactObj.w || CANVAS_W) * scaleX);
-      let reactH = makeEven((reactObj.h || (CANVAS_H/3)) * scaleY);
-      let reactX = Math.round((reactObj.x || 0) * scaleX);
-      let reactY = Math.round((reactObj.y || 0) * scaleY);
+      // 1. Cálculos de Medida com 2% de ZOOM (Sangramento) para matar bordas
+      const BLEED = 1.02; 
 
-      // 2. Aplica escala no Base (Dragão)
-      let baseW = makeEven((baseObj.w || CANVAS_W) * scaleX);
-      let baseH = makeEven((baseObj.h || (CANVAS_H - reactH)) * scaleY);
-      let baseX = Math.round((baseObj.x || 0) * scaleX);
-      let baseY = Math.round((baseObj.y || 0) * scaleY);
+      let rW = makeEven((reactObj.w || 360) * scaleX);
+      let rH = makeEven((reactObj.h || 200) * scaleY);
+      let rX = Math.round((reactObj.x || 0) * scaleX);
+      let rY = Math.round((reactObj.y || 0) * scaleY);
 
-      // 🧲 O "SNAP" ABSOLUTO (Ideia de jogar para os limites)
-      // Se ocupar a tela toda na largura, força o preenchimento exato em 100%
-      if (reactW >= CANVAS_W - 20) {
-        reactW = CANVAS_W;
-        reactX = 0;
-        baseW = CANVAS_W;
-        baseX = 0;
-        
-        if (reactY <= baseY) { 
-          // React no topo absoluto
-          reactY = 0;
-          baseY = reactH;
-          baseH = CANVAS_H - reactH; // O fundo engole todo o resto
-        } else {
-          // React na base absoluta
-          baseY = 0;
-          reactY = baseH;
-          reactH = CANVAS_H - baseH;
-        }
-      }
+      let bW = makeEven((baseObj.w || 360) * scaleX);
+      let bH = makeEven((baseObj.h || 440) * scaleY);
+      let bX = Math.round((baseObj.x || 0) * scaleX);
+      let bY = Math.round((baseObj.y || 200) * scaleY);
 
-      // 3. Aplica escala no Texto
-      let textX = textObj.x !== undefined ? Math.round(textObj.x * scaleX) : "(w-text_w)/2";
-      let textY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : reactH - 30;
-      let textSize = Math.round((textObj.size || 35) * avgScale);
+      // 2. Texto
+      let tX = textObj.x !== undefined ? Math.round(textObj.x * scaleX) : "(w-text_w)/2";
+      let tY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : 600;
+      let tS = Math.round((textObj.size || 30) * ((scaleX + scaleY) / 2));
 
-      // drawtext agora usa 'textfile' para puxar do arquivo temporário limpo.
-      // fontfile DEVE existir no servidor Render. Montserrat-Bold garantida.
+      // 3. FILTRO COM ZOOM: escalamos um pouco mais e cortamos no tamanho certo
       const videoFilters = `
         color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];
-        [0:v]scale=${baseW}:${baseH}:force_original_aspect_ratio=increase,crop=${baseW}:${baseH}[base_scaled];
-        [1:v]scale=${reactW}:${reactH}:force_original_aspect_ratio=increase,crop=${reactW}:${reactH}[react_scaled];
-        [bg][base_scaled]overlay=${baseX}:${baseY}:shortest=1[bg_base];
-        [bg_base][react_scaled]overlay=${reactX}:${reactY}[vid_both];
-        [vid_both]drawtext=textfile='${sanitizePath(textPath)}':fontfile=/opt/render/project/src/fonts/Montserrat-Bold.ttf:x=${textX}:y=${textY}:fontsize=${textSize}:fontcolor=white:borderw=5:bordercolor=black[final]
+        [0:v]scale=${makeEven(bW*BLEED)}:${makeEven(bH*BLEED)}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled];
+        [1:v]scale=${makeEven(rW*BLEED)}:${makeEven(rH*BLEED)}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled];
+        [bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base];
+        [bg_base][react_scaled]overlay=${rX}:${rY}[vid_both];
+        [vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]
       `.replace(/\s+/g, "");
 
-      const command = `ffmpeg -y -threads 2 -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset veryfast -crf 28 -shortest -c:a aac -b:a 128k -strict -2 "${outputPath}"`;
-
-      console.log("Executando Renderização Universal de Coordenadas...");
+      const command = `ffmpeg -y -threads 2 -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset veryfast -crf 28 -shortest -c:a aac "${outputPath}"`;
 
       exec(command, (error, stdout, stderr) => {
         if (error) {
-          console.error("===== FFMPEG ERROR =====");
           console.error(stderr);
           return res.status(500).send("Erro no FFmpeg.");
         }
-
-        console.log("Render finalizado com sucesso!");
-
-        // Envia o vídeo finalizado e limpa os arquivos temporários do disco
         res.download(outputPath, () => {
           try {
-            if (fs.existsSync(basePath)) fs.unlinkSync(basePath);
-            if (fs.existsSync(reactPath)) fs.unlinkSync(reactPath);
-            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-            if (fs.existsSync(textPath)) fs.unlinkSync(textPath); // Apaga o texto temporário
-          } catch (e) {
-            console.error("Cleanup error:", e);
-          }
+            fs.unlinkSync(basePath);
+            fs.unlinkSync(reactPath);
+            fs.unlinkSync(outputPath);
+            fs.unlinkSync(textPath);
+          } catch (e) {}
         });
       });
-
     } catch (err) {
-      console.error("GLOBAL ERROR:", err);
       res.status(500).send("Erro interno.");
     }
   }
 );
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Servidor Online."));
+app.listen(PORT, () => console.log("Servidor rodando."));
