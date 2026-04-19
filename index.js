@@ -19,9 +19,7 @@ app.post(
   ]),
   (req, res) => {
     try {
-
-      // 🔥 DEBUG (ESSENCIAL AGORA)
-      console.log("===== NEW REQUEST =====");
+      console.log("===== REQUEST RECEBIDA =====");
       console.log("BODY:", req.body);
       console.log("FILES:", req.files);
 
@@ -29,7 +27,7 @@ app.post(
       const reactFile = req.files?.["reactionVideo"]?.[0];
 
       if (!baseFile || !reactFile) {
-        console.error("Arquivos não recebidos corretamente");
+        console.error("Arquivos não enviados corretamente");
         return res.status(400).send("Missing files");
       }
 
@@ -37,12 +35,11 @@ app.post(
       const reactPath = reactFile.path;
 
       const layout = req.body.layout || "corner";
-      const textRaw = req.body.text || "";
-      const text = textRaw.replace(/'/g, "\\'");
+      const text = (req.body.text || "").replace(/'/g, "\\'");
 
       const outputPath = `output_${Date.now()}.mp4`;
 
-      // 📍 POSIÇÃO DO REACT (SEM DEFORMAR)
+      // 📍 POSIÇÃO DO REACT
       let overlayPosition = "W-w-20:H-h-20";
 
       if (layout === "center") {
@@ -57,36 +54,40 @@ app.post(
         overlayPosition = "(W-w)/2:H-h-20";
       }
 
-      // 🎯 FFMPEG (ROBUSTO)
+      // ⚡ FFMPEG OTIMIZADO PRA 512MB
       const command = `
 ffmpeg -y \
+-threads 2 \
 -i ${basePath} -i ${reactPath} \
 -filter_complex "
-[0:v]scale=1080:1920[base];
-[1:v]scale=320:-2[react];
+[0:v]scale=720:1280:flags=fast_bilinear[base];
+[1:v]scale=240:-2[react];
 [base][react]overlay=${overlayPosition}:format=auto,
-drawtext=text='${text}':x=(w-text_w)/2:y=h-150:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.6
+drawtext=text='${text}':fontsize=32:fontcolor=white:box=1:boxcolor=black@0.5:x=(w-text_w)/2:y=h-120
 " \
--c:v libx264 -preset fast -crf 23 \
+-c:v libx264 -preset ultrafast -crf 28 \
 -c:a copy ${outputPath}
 `;
 
-      console.log("FFmpeg command running...");
+      console.log("FFmpeg rodando...");
 
       exec(command, (error, stdout, stderr) => {
-
         if (error) {
           console.error("===== FFMPEG ERROR =====");
           console.error(stderr);
           return res.status(500).send("Erro ao gerar vídeo");
         }
 
-        console.log("Render concluído com sucesso");
+        console.log("Render finalizado com sucesso");
 
         res.download(outputPath, () => {
-          fs.unlinkSync(basePath);
-          fs.unlinkSync(reactPath);
-          fs.unlinkSync(outputPath);
+          try {
+            fs.unlinkSync(basePath);
+            fs.unlinkSync(reactPath);
+            fs.unlinkSync(outputPath);
+          } catch (e) {
+            console.error("Erro ao limpar arquivos:", e);
+          }
         });
       });
 
