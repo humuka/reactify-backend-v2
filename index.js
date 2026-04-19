@@ -66,7 +66,7 @@ app.post("/api/download-instagram", async (req, res) => {
   }
 });
 
-// --- ROTA 2: PESQUISA DE VÍDEOS EM ALTA (URL DIRETA DA HASHTAG) ---
+// --- ROTA 2: PESQUISA DE VÍDEOS EM ALTA (MODO PROFUNDO) ---
 app.post("/api/search-instagram", async (req, res) => {
   const { keyword } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN;
@@ -76,37 +76,28 @@ app.post("/api/search-instagram", async (req, res) => {
 
   try {
     const safeKeyword = keyword.replace(/[#\s]+/g, ''); 
-    console.log(`🔍 Acessando diretamente a página da hashtag: #${safeKeyword}...`);
+    console.log(`🔍 Buscando tendências para #${safeKeyword} (Modo Profundo)...`);
     
     const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=120`;
 
-    // 🔥 O TRUQUE: Mandamos a URL real do Instagram em vez de usar o buscador interno
-    const targetUrl = `https://www.instagram.com/explore/tags/${safeKeyword}/`;
-
+    // 🔥 O SEGREDO ESTÁ AQUI: "resultsType": "details"
+    // Isso obriga o Apify a entrar em cada post e capturar o arquivo MP4 real (.videoUrl)
     const apifyRes = await axios.post(apifyUrl, {
-      "directUrls": [targetUrl],
-      "resultsType": "posts", // Diz para trazer apenas os posts
-      "searchLimit": 30 // Como vamos na página certa, 30 posts já garantem vários Reels
+      "search": safeKeyword,
+      "searchType": "hashtag",
+      "resultsType": "details", 
+      "searchLimit": 15 // 15 é o suficiente para achar pelo menos 6 vídeos rápido
     });
 
     const items = apifyRes.data;
-    console.log(`✅ Apify processou ${items?.length || 0} blocos de dados.`);
-
+    
     if (!items || items.length === 0) {
-      return res.status(404).send("Nenhum post encontrado nesta hashtag.");
+      return res.status(404).send("Nenhuma postagem detalhada encontrada.");
     }
 
-    // O Instagram às vezes esconde os posts dentro de "topPosts", então fazemos o resgate:
-    let rawPosts = items;
-    if (items[0] && items[0].topPosts) {
-        rawPosts = items[0].topPosts;
-    } else if (items[0] && items[0].latestPosts) {
-        rawPosts = items[0].latestPosts;
-    }
-
-    // Filtra apenas vídeos
-    const videos = rawPosts
-      .filter(item => item.isVideo === true || item.videoUrl || item.type === "Video")
+    // Agora o filtro é super simples: Se tem videoUrl, é vídeo!
+    const videos = items
+      .filter(item => item.videoUrl) 
       .slice(0, 6)
       .map(item => ({
         id: item.id,
@@ -118,16 +109,16 @@ app.post("/api/search-instagram", async (req, res) => {
         caption: item.caption ? item.caption.substring(0, 70) + '...' : ''
       }));
 
-    console.log(`🎬 Encontramos ${videos.length} vídeos válidos para a vitrine!`);
+    console.log(`🎬 Sucesso! Extraímos ${videos.length} links MP4 reais.`);
 
     if (videos.length === 0) {
-      return res.status(404).send("Não encontramos vídeos recentes nessa hashtag. Tente outra.");
+      return res.status(404).send("Busca concluída, mas nenhum dos posts recentes era vídeo (Reels).");
     }
 
     res.json({ success: true, results: videos });
   } catch (error) {
     console.error("❌ Erro na busca:", error.message);
-    res.status(500).send("Erro na comunicação com o servidor de busca do Instagram.");
+    res.status(500).send("Erro no servidor do Apify.");
   }
 });
 
