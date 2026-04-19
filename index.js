@@ -30,7 +30,6 @@ const makeEven = (num) => {
   return n % 2 === 0 ? n : n + 1;
 };
 
-// 🔥 NOVO: Função que quebra o texto a cada 2 palavras para evitar corte na tela
 const formatTextToMultiline = (text, wordsPerLine = 2) => {
   if (!text) return "";
   const words = text.trim().split(/\s+/);
@@ -38,7 +37,6 @@ const formatTextToMultiline = (text, wordsPerLine = 2) => {
   for (let i = 0; i < words.length; i += wordsPerLine) {
     lines.push(words.slice(i, i + wordsPerLine).join(" "));
   }
-  // O "\n" representa o "Enter" (quebra de linha) no arquivo de texto
   return lines.join("\n");
 };
 
@@ -79,7 +77,7 @@ app.post("/api/download-instagram", async (req, res) => {
   }
 });
 
-// --- ROTA 2: RENDERIZAÇÃO FINAL COM CROP DE TEMPO E TEXTO MULTILINHA ---
+// --- ROTA 2: RENDERIZAÇÃO CLÁSSICA (A VERSÃO ESTÁVEL) ---
 app.post(
   "/api/render-video",
   upload.fields([
@@ -88,7 +86,7 @@ app.post(
   ]),
   (req, res) => {
     try {
-      console.log("🎬 Iniciando exportação com texto ajustado...");
+      console.log("🎬 Exportando versão CLÁSSICA e ESTÁVEL...");
 
       const baseObj = parseSafeJSON(req.body.base);
       const reactObj = parseSafeJSON(req.body.react);
@@ -110,10 +108,7 @@ app.post(
       const outputPath = path.join(uploadDir, `output_${Date.now()}.mp4`);
       const textPath = path.join(uploadDir, `text_${Date.now()}.txt`);
 
-      // 🔥 MÁGICA ACONTECENDO AQUI: Processamos o texto antes de salvar
-      const rawText = textObj.value || "";
-      const formattedText = formatTextToMultiline(rawText, 2); // Quebra a cada 2 palavras
-      
+      const formattedText = formatTextToMultiline(textObj.value || "", 2);
       fs.writeFileSync(textPath, formattedText, "utf8");
 
       const CANVAS_W = 720;
@@ -139,24 +134,5 @@ app.post(
       let tY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : 600;
       let tS = Math.round((textObj.size || 35) * ((scaleX + scaleY) / 2));
 
-      // Filtro do FFmpeg
-      const videoFilters = `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled];[1:v]scale=${rW}:${rH}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled];[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base];[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both];[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`.replace(/\s+/g, "");
-
-      const command = `ffmpeg -y -threads 2 -ss ${startTime} -t ${duration} -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset veryfast -crf 28 -shortest -c:a aac "${outputPath}"`;
-
-      exec(command, (error, stdout, stderr) => {
-        if (error) return res.status(500).send("Erro no FFmpeg.");
-        res.download(outputPath, () => {
-          try {
-            if (fs.existsSync(reactPath)) fs.unlinkSync(reactPath);
-            if (fs.existsSync(textPath)) fs.unlinkSync(textPath);
-            if (!baseVideoName && fs.existsSync(basePath)) fs.unlinkSync(basePath);
-          } catch (e) {}
-        });
-      });
-    } catch (err) { res.status(500).send("Erro interno."); }
-  }
-);
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Reactify online na porta ${PORT}`));
+      // Filtro Clássico Original (increase e crop)
+      const videoFilters = `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled];[1:v]scale=${rW}:${rH}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled];[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base];[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both];[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu
