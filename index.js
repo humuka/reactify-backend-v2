@@ -19,6 +19,8 @@ app.post(
   ]),
   (req, res) => {
     try {
+      console.log("BODY:", req.body);
+
       const basePath = req.files["baseVideo"][0].path;
       const reactPath = req.files["reactionVideo"][0].path;
 
@@ -27,28 +29,30 @@ app.post(
 
       const outputPath = `output_${Date.now()}.mp4`;
 
-      // 🎯 POSIÇÕES DO REACT
-      let overlayPosition = "W-w-10:H-h-10"; // corner default
+      // 📍 POSIÇÃO DO REACT (SEM DEFORMAR)
+      let overlayPosition = "W-w-20:H-h-20";
 
       if (layout === "center") {
         overlayPosition = "(W-w)/2:(H-h)/2";
       }
 
       if (layout === "top") {
-        overlayPosition = "(W-w)/2:10";
+        overlayPosition = "(W-w)/2:20";
       }
 
       if (layout === "bottom") {
-        overlayPosition = "(W-w)/2:H-h-10";
+        overlayPosition = "(W-w)/2:H-h-20";
       }
 
-      // 🎯 COMANDO FFMPEG
+      // 🎯 FFMPEG (CORRIGIDO)
       const command = `
 ffmpeg -y \
 -i ${basePath} -i ${reactPath} \
 -filter_complex "
-[1:v]scale=300:300[react];
-[0:v][react]overlay=${overlayPosition},drawtext=text='${text}':x=(w-text_w)/2:y=h-100:fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5
+[0:v]scale=1080:1920[base];
+[1:v]scale=320:-1[react];
+[base][react]overlay=${overlayPosition}:format=auto,
+drawtext=text='${text}':x=(w-text_w)/2:y=h-150:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.5
 " \
 -c:v libx264 -preset fast -crf 23 \
 -c:a copy ${outputPath}
