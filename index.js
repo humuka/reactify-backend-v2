@@ -19,13 +19,26 @@ app.post(
   ]),
   (req, res) => {
     try {
-      console.log("BODY:", req.body);
 
-      const basePath = req.files["baseVideo"][0].path;
-      const reactPath = req.files["reactionVideo"][0].path;
+      // 🔥 DEBUG (ESSENCIAL AGORA)
+      console.log("===== NEW REQUEST =====");
+      console.log("BODY:", req.body);
+      console.log("FILES:", req.files);
+
+      const baseFile = req.files?.["baseVideo"]?.[0];
+      const reactFile = req.files?.["reactionVideo"]?.[0];
+
+      if (!baseFile || !reactFile) {
+        console.error("Arquivos não recebidos corretamente");
+        return res.status(400).send("Missing files");
+      }
+
+      const basePath = baseFile.path;
+      const reactPath = reactFile.path;
 
       const layout = req.body.layout || "corner";
-      const text = (req.body.text || "").replace(/'/g, "\\'");
+      const textRaw = req.body.text || "";
+      const text = textRaw.replace(/'/g, "\\'");
 
       const outputPath = `output_${Date.now()}.mp4`;
 
@@ -44,25 +57,31 @@ app.post(
         overlayPosition = "(W-w)/2:H-h-20";
       }
 
-      // 🎯 FFMPEG (CORRIGIDO)
+      // 🎯 FFMPEG (ROBUSTO)
       const command = `
 ffmpeg -y \
 -i ${basePath} -i ${reactPath} \
 -filter_complex "
 [0:v]scale=1080:1920[base];
-[1:v]scale=320:-1[react];
+[1:v]scale=320:-2[react];
 [base][react]overlay=${overlayPosition}:format=auto,
-drawtext=text='${text}':x=(w-text_w)/2:y=h-150:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.5
+drawtext=text='${text}':x=(w-text_w)/2:y=h-150:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.6
 " \
 -c:v libx264 -preset fast -crf 23 \
 -c:a copy ${outputPath}
 `;
 
+      console.log("FFmpeg command running...");
+
       exec(command, (error, stdout, stderr) => {
+
         if (error) {
-          console.error("FFmpeg error:", stderr);
+          console.error("===== FFMPEG ERROR =====");
+          console.error(stderr);
           return res.status(500).send("Erro ao gerar vídeo");
         }
+
+        console.log("Render concluído com sucesso");
 
         res.download(outputPath, () => {
           fs.unlinkSync(basePath);
@@ -70,8 +89,9 @@ drawtext=text='${text}':x=(w-text_w)/2:y=h-150:fontsize=48:fontcolor=white:box=1
           fs.unlinkSync(outputPath);
         });
       });
+
     } catch (err) {
-      console.error(err);
+      console.error("ERRO GERAL:", err);
       res.status(500).send("Erro interno");
     }
   }
