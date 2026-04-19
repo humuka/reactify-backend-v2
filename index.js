@@ -30,7 +30,7 @@ const makeEven = (num) => {
   return n % 2 === 0 ? n : n + 1;
 };
 
-// Função para evitar que o texto corte nas bordas do vídeo
+// Quebra de linha a cada 2 palavras
 const formatTextToMultiline = (text, wordsPerLine = 2) => {
   if (!text) return "";
   const words = text.trim().split(/\s+/);
@@ -41,7 +41,7 @@ const formatTextToMultiline = (text, wordsPerLine = 2) => {
   return lines.join("\n");
 };
 
-// --- ROTA 1: DOWNLOAD DIRETO DO INSTAGRAM (APIFY) ---
+// --- ROTA 1: DOWNLOAD DIRETO DO INSTAGRAM ---
 app.post("/api/download-instagram", async (req, res) => {
   const { url } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN; 
@@ -52,7 +52,7 @@ app.post("/api/download-instagram", async (req, res) => {
   try {
     const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`;
     const apifyRes = await axios.post(apifyUrl, {
-      "directUrls": [url.split('?')[0]], // Remove parâmetros extras do link
+      "directUrls": [url.split('?')[0]],
       "resultsType": "details",
       "searchLimit": 1
     });
@@ -78,7 +78,7 @@ app.post("/api/download-instagram", async (req, res) => {
   }
 });
 
-// --- ROTA 2: RENDERIZAÇÃO FINAL COM CROP E POSIÇÃO EXACTA ---
+// --- ROTA 2: RENDERIZAÇÃO FINAL (BLINDADA CONTRA TELA PRETA E ZOOM) ---
 app.post(
   "/api/render-video",
   upload.fields([
@@ -87,7 +87,7 @@ app.post(
   ]),
   (req, res) => {
     try {
-      console.log("🎬 Iniciando renderização: Matemática de Proporção Ativada...");
+      console.log("🎬 Renderizando com Trava Matemática Antizoom...");
 
       const baseObj = parseSafeJSON(req.body.base);
       const reactObj = parseSafeJSON(req.body.react);
@@ -100,7 +100,6 @@ app.post(
       const basePath = baseVideoName ? path.join(uploadDir, baseVideoName) : baseFile?.path;
       const reactPath = reactFile?.path;
 
-      // Mantendo o limite de react otimizado para retenção
       const startTime = req.body.startTime || 0; 
       const duration = 10.5; 
 
@@ -110,45 +109,47 @@ app.post(
       const outputPath = path.join(uploadDir, `output_${Date.now()}.mp4`);
       const textPath = path.join(uploadDir, `text_${Date.now()}.txt`);
 
-      // Escreve o texto formatado no arquivo
       const formattedText = formatTextToMultiline(textObj.value || "", 2);
       fs.writeFileSync(textPath, formattedText, "utf8");
 
       const CANVAS_W = 720;
       const CANVAS_H = 1280;
 
-      // 📏 CÁLCULO DE ESCALA: Traduzindo a tela do Lovable para o arquivo HD
-      let scaleX = 1, scaleY = 1;
-      if (req.body.editorW && req.body.editorH) {
-        scaleX = CANVAS_W / Number(req.body.editorW);
-        scaleY = CANVAS_H / Number(req.body.editorH);
-      } else { 
-        scaleX = 2; 
-        scaleY = 2; 
-      }
+      // 🛡️ TRAVA DE SEGURANÇA 1: Garante que a escala nunca seja "NaN"
+      let eW = parseFloat(req.body.editorW);
+      let eH = parseFloat(req.body.editorH);
+      let scaleX = (eW > 0) ? (CANVAS_W / eW) : 2;
+      let scaleY = (eH > 0) ? (CANVAS_H / eH) : 2;
 
-      // 📍 LARGURA, ALTURA, X E Y DO VÍDEO DE FUNDO
-      let bW = makeEven((baseObj.w || 360) * scaleX);
-      let bH = makeEven((baseObj.h || 640) * scaleY);
-      let bX = Math.round((baseObj.x || 0) * scaleX);
-      let bY = Math.round((baseObj.y || 0) * scaleY);
+      // 🛡️ TRAVA DE SEGURANÇA 2: Garante larguras e posições sempre numéricas
+      let baseW = parseFloat(baseObj.w);
+      let bW = makeEven((!isNaN(baseW) ? baseW : 360) * scaleX);
+      let baseX = parseFloat(baseObj.x);
+      let bX = Math.round((!isNaN(baseX) ? baseX : 0) * scaleX);
+      let baseY = parseFloat(baseObj.y);
+      let bY = Math.round((!isNaN(baseY) ? baseY : 0) * scaleY);
 
-      // 📍 LARGURA, ALTURA, X E Y DA REAÇÃO
-      let rW = makeEven((reactObj.w || 360) * scaleX);
-      let rH = makeEven((reactObj.h || 240) * scaleY);
-      let rX = Math.round((reactObj.x || 0) * scaleX);
-      let rY = Math.round((reactObj.y || 0) * scaleY);
+      let reactW = parseFloat(reactObj.w);
+      let rW = makeEven((!isNaN(reactW) ? reactW : 360) * scaleX);
+      let reactX = parseFloat(reactObj.x);
+      let rX = Math.round((!isNaN(reactX) ? reactX : 0) * scaleX);
+      let reactY = parseFloat(reactObj.y);
+      let rY = Math.round((!isNaN(reactY) ? reactY : 0) * scaleY);
 
-      // 📍 POSIÇÃO DO TEXTO
-      let tX = textObj.x !== undefined ? Math.round(textObj.x * scaleX) : "(w-text_w)/2";
-      let tY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : 600;
-      let tS = Math.round((textObj.size || 35) * ((scaleX + scaleY) / 2));
+      let textX = parseFloat(textObj.x);
+      let tX = !isNaN(textX) ? Math.round(textX * scaleX) : "(w-text_w)/2";
+      let textY = parseFloat(textObj.y);
+      let tY = !isNaN(textY) ? Math.round(textY * scaleY) : 600;
+      let textSize = parseFloat(textObj.size);
+      let tS = Math.round((!isNaN(textSize) ? textSize : 35) * ((scaleX + scaleY) / 2));
 
-      // 🎥 O FILTRO MÁGICO
+      // 🎥 FILTRO MÁGICO SIMPLIFICADO: 
+      // Em vez de 'pad' ou 'crop', usamos apenas 'scale=LARGURA:-1'. 
+      // Isso amarra a largura ao tamanho da tela e ajusta a altura automaticamente, matando o zoom bizarro.
       const videoFilters = [
         `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg]`,
-        `[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=decrease,pad=${bW}:${bH}:(ow-iw)/2:(oh-ih)/2:color=black[base_scaled]`,
-        `[1:v]scale=${rW}:${rH}:force_original_aspect_ratio=decrease,pad=${rW}:${rH}:(ow-iw)/2:(oh-ih)/2:color=black[react_scaled]`,
+        `[0:v]scale=${bW}:-1[base_scaled]`,
+        `[1:v]scale=${rW}:-1[react_scaled]`,
         `[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base]`,
         `[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both]`,
         `[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`
@@ -162,7 +163,6 @@ app.post(
           return res.status(500).send("Erro no FFmpeg.");
         }
         res.download(outputPath, () => {
-          // Limpeza do servidor para não lotar o disco
           try {
             if (fs.existsSync(reactPath)) fs.unlinkSync(reactPath);
             if (fs.existsSync(textPath)) fs.unlinkSync(textPath);
@@ -178,4 +178,4 @@ app.post(
 );
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Reactify Motor V2 online na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Motor Blindado online na porta ${PORT}`));
