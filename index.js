@@ -93,7 +93,6 @@ app.post(
       const CANVAS_W = 720;
       const CANVAS_H = 1280;
 
-      // Segurança para evitar divisões por zero ou NaN
       const eW = parseFloat(req.body.editorW) || 360;
       const eH = parseFloat(req.body.editorH) || 640;
       const sX = CANVAS_W / eW;
@@ -117,10 +116,14 @@ app.post(
       const tX = !isNaN(parseFloat(textObj.x)) ? Math.round(parseFloat(textObj.x) * sX) : "(w-text_w)/2";
       const tY = !isNaN(parseFloat(textObj.y)) ? Math.round(parseFloat(textObj.y) * sY) : 600;
 
+      // 🔥 AQUI ESTÁ A CORREÇÃO: Array dividido em múltiplas linhas
       const videoFilters = [
         `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg]`,
         `[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled]`,
         `[1:v]scale=${rW}:${rH}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled]`,
         `[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base]`,
         `[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both]`,
-        `[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize
+        `[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`
+      ].join(";");
+
+      const cmd = `ffmpeg -y -ss ${req.body.startTime || 0} -t 10.5 -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset superfast -crf 28 -c
