@@ -66,7 +66,7 @@ app.post("/api/download-instagram", async (req, res) => {
   }
 });
 
-// --- ROTA 2: PESQUISA DE VÍDEOS EM ALTA (NOVA FUNÇÃO) ---
+// --- ROTA 2: PESQUISA DE VÍDEOS EM ALTA (OTIMIZADA) ---
 app.post("/api/search-instagram", async (req, res) => {
   const { keyword } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN;
@@ -75,41 +75,50 @@ app.post("/api/search-instagram", async (req, res) => {
   if (!APIFY_TOKEN) return res.status(500).send("Token do Apify ausente.");
 
   try {
-    console.log(`🔍 Pesquisando tendências para: #${keyword}...`);
+    // Limpa a palavra: remove espaços e o símbolo de hashtag se o usuário colocar
+    const safeKeyword = keyword.replace(/[#\s]+/g, ''); 
+    console.log(`🔍 Pesquisando tendências para a hashtag: #${safeKeyword}...`);
     
-    // Remove espaços para usar como hashtag
-    const safeKeyword = keyword.replace(/\s+/g, '');
-    const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`;
+    // Aumentamos o timeout para 120s porque busca de hashtag demora mais que link direto
+    const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=120`;
 
     const apifyRes = await axios.post(apifyUrl, {
       "search": safeKeyword,
       "searchType": "hashtag",
-      "resultsType": "posts",
-      "resultsLimit": 20 // Puxa 20 para ter margem de filtro
+      "searchLimit": 30 // Puxamos 30 posts para ter certeza que virão vídeos no meio
     });
 
-    // Filtra apenas vídeos (Reels) e pega os 6 primeiros
+    console.log(`✅ Apify retornou ${apifyRes.data?.length || 0} posts brutos.`);
+
+    if (!apifyRes.data || apifyRes.data.length === 0) {
+      console.error("❌ O Apify não achou NADA com essa hashtag.");
+      return res.status(404).send("Nenhum post encontrado. Tente um tema mais popular (ex: futebol).");
+    }
+
+    // Filtro agressivo para pegar SÓ vídeos (Reels)
     const videos = apifyRes.data
-      .filter(item => item.isVideo || item.videoUrl)
+      .filter(item => item.isVideo === true || item.videoUrl || item.type === "Video")
       .slice(0, 6)
       .map(item => ({
         id: item.id,
-        url: item.url, // O link original do post
-        thumbnailUrl: item.displayUrl, // Capa do vídeo
-        videoUrl: item.videoUrl, // O MP4
-        views: item.videoViewCount || 0,
+        url: item.url, 
+        thumbnailUrl: item.displayUrl, 
+        videoUrl: item.videoUrl, 
+        views: item.videoViewCount || item.viewCount || 0,
         likes: item.likesCount || 0,
-        caption: item.caption ? item.caption.substring(0, 60) + '...' : ''
+        caption: item.caption ? item.caption.substring(0, 70) + '...' : ''
       }));
 
+    console.log(`🎬 Dos posts, ${videos.length} eram vídeos válidos.`);
+
     if (videos.length === 0) {
-      return res.status(404).send("Nenhum vídeo encontrado para este tema.");
+      return res.status(404).send("Achamos posts, mas nenhum era vídeo. Tente outra palavra.");
     }
 
     res.json({ success: true, results: videos });
   } catch (error) {
-    console.error("Erro na busca:", error.message);
-    res.status(500).send("Erro ao buscar tendências no Apify.");
+    console.error("❌ Erro na busca:", error.response ? error.response.data : error.message);
+    res.status(500).send("Erro na comunicação com o servidor de busca.");
   }
 });
 
