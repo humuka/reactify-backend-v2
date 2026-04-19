@@ -19,6 +19,7 @@ if (!fs.existsSync(uploadDir)) {
 
 const upload = multer({ dest: "uploads/" });
 
+// --- UTILITÁRIOS ---
 const parseSafeJSON = (data) => {
   try { return data ? JSON.parse(data) : {}; } 
   catch (e) { return {}; }
@@ -29,13 +30,25 @@ const makeEven = (num) => {
   return n % 2 === 0 ? n : n + 1;
 };
 
-// --- ROTA 1: DOWNLOAD DO INSTAGRAM (DIRETO) ---
+// 🔥 NOVO: Função que quebra o texto a cada 2 palavras para evitar corte na tela
+const formatTextToMultiline = (text, wordsPerLine = 2) => {
+  if (!text) return "";
+  const words = text.trim().split(/\s+/);
+  const lines = [];
+  for (let i = 0; i < words.length; i += wordsPerLine) {
+    lines.push(words.slice(i, i + wordsPerLine).join(" "));
+  }
+  // O "\n" representa o "Enter" (quebra de linha) no arquivo de texto
+  return lines.join("\n");
+};
+
+// --- ROTA 1: DOWNLOAD DO INSTAGRAM ---
 app.post("/api/download-instagram", async (req, res) => {
   const { url } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN; 
 
   if (!url) return res.status(400).send("URL necessária.");
-  if (!APIFY_TOKEN) return res.status(500).send("Token do Apify não configurado.");
+  if (!APIFY_TOKEN) return res.status(500).send("Token do Apify ausente.");
 
   try {
     const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`;
@@ -66,84 +79,17 @@ app.post("/api/download-instagram", async (req, res) => {
   }
 });
 
-// --- ROTA 2: PESQUISA DE VÍDEOS EM ALTA (CORRIGIDA) ---
-app.post("/api/search-instagram", async (req, res) => {
-  const { keyword } = req.body;
-  const APIFY_TOKEN = process.env.APIFY_TOKEN;
-
-  if (!keyword) return res.status(400).send("Palavra-chave necessária.");
-  if (!APIFY_TOKEN) return res.status(500).send("Token do Apify ausente.");
-
-  try {
-    const safeKeyword = keyword.replace(/[#\s]+/g, ''); 
-    console.log(`🔍 Buscando tendências para a hashtag: #${safeKeyword}...`);
-    
-    // O timeout pode ser rápido de novo (60s)
-    const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`;
-
-    const apifyRes = await axios.post(apifyUrl, {
-      "search": safeKeyword,
-      "searchType": "hashtag",
-      "searchLimit": 30 // 30 é mais que suficiente agora
-    });
-
-    // 🔥 O SEGREDO: O Apify coloca TUDO dentro do primeiro item (a "Caixa" da hashtag)
-    const hashtagData = apifyRes.data[0];
-
-    if (!hashtagData) {
-      return res.status(404).send("Hashtag não encontrada no Instagram.");
-    }
-
-    // Abre as gavetas de "Top Posts" e "Latest Posts" e junta tudo
-    let allPosts = [];
-    if (hashtagData.topPosts && hashtagData.topPosts.length > 0) {
-        allPosts = allPosts.concat(hashtagData.topPosts);
-    }
-    if (hashtagData.latestPosts && hashtagData.latestPosts.length > 0) {
-        allPosts = allPosts.concat(hashtagData.latestPosts);
-    }
-
-    // Se por acaso vier direto na raiz
-    if (allPosts.length === 0 && apifyRes.data.length > 1) {
-        allPosts = apifyRes.data;
-    }
-
-    console.log(`📦 Encontramos ${allPosts.length} posts na hashtag.`);
-
-    // Agora sim! Filtramos os que são vídeo.
-    // Observação: Não precisamos do .mp4 aqui, só da URL do post. Quando o Lovable 
-    // clicar no vídeo, ele manda essa URL pra Rota 1, e ela sim extrai o .mp4!
-    const videos = allPosts
-      .filter(post => post.isVideo === true || post.type === "Video")
-      .slice(0, 6)
-      .map(post => ({
-        id: post.id,
-        url: post.url, // O link do post (ex: instagram.com/p/123)
-        thumbnailUrl: post.displayUrl, 
-        views: post.videoViewCount || post.viewCount || 0,
-        likes: post.likesCount || 0,
-        caption: post.caption ? post.caption.substring(0, 70) + '...' : ''
-      }));
-
-    console.log(`🎬 Filtramos os ${videos.length} melhores Reels!`);
-
-    if (videos.length === 0) {
-      return res.status(404).send("Encontramos a hashtag, mas não havia vídeos.");
-    }
-
-    res.json({ success: true, results: videos });
-  } catch (error) {
-    console.error("❌ Erro na busca:", error.message);
-    res.status(500).send("Erro de comunicação com o Apify.");
-  }
-});
-
-// --- ROTA 3: RENDERIZAÇÃO FINAL COM CORTE (MANTIDA INTACTA) ---
+// --- ROTA 2: RENDERIZAÇÃO FINAL COM CROP DE TEMPO E TEXTO MULTILINHA ---
 app.post(
   "/api/render-video",
-  upload.fields([{ name: "baseVideo", maxCount: 1 }, { name: "reactionVideo", maxCount: 1 }]),
+  upload.fields([
+    { name: "baseVideo", maxCount: 1 },
+    { name: "reactionVideo", maxCount: 1 },
+  ]),
   (req, res) => {
     try {
+      console.log("🎬 Iniciando exportação com texto ajustado...");
+
       const baseObj = parseSafeJSON(req.body.base);
       const reactObj = parseSafeJSON(req.body.react);
       const textObj = parseSafeJSON(req.body.text);
@@ -164,7 +110,11 @@ app.post(
       const outputPath = path.join(uploadDir, `output_${Date.now()}.mp4`);
       const textPath = path.join(uploadDir, `text_${Date.now()}.txt`);
 
-      fs.writeFileSync(textPath, textObj.value || "", "utf8");
+      // 🔥 MÁGICA ACONTECENDO AQUI: Processamos o texto antes de salvar
+      const rawText = textObj.value || "";
+      const formattedText = formatTextToMultiline(rawText, 2); // Quebra a cada 2 palavras
+      
+      fs.writeFileSync(textPath, formattedText, "utf8");
 
       const CANVAS_W = 720;
       const CANVAS_H = 1280;
@@ -189,6 +139,7 @@ app.post(
       let tY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : 600;
       let tS = Math.round((textObj.size || 35) * ((scaleX + scaleY) / 2));
 
+      // Filtro do FFmpeg
       const videoFilters = `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled];[1:v]scale=${rW}:${rH}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled];[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base];[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both];[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`.replace(/\s+/g, "");
 
       const command = `ffmpeg -y -threads 2 -ss ${startTime} -t ${duration} -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset veryfast -crf 28 -shortest -c:a aac "${outputPath}"`;
