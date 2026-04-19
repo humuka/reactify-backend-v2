@@ -27,10 +27,10 @@ const parseSafeJSON = (data) => {
 
 const makeEven = (num) => {
   let n = Math.round(Number(num) || 0);
+  if (isNaN(n) || n <= 0) return 2;
   return n % 2 === 0 ? n : n + 1;
 };
 
-// Quebra de linha a cada 2 palavras (A única coisa nova que mantivemos)
 const formatTextToMultiline = (text, wordsPerLine = 2) => {
   if (!text) return "";
   const words = text.trim().split(/\s+/);
@@ -45,9 +45,8 @@ const formatTextToMultiline = (text, wordsPerLine = 2) => {
 app.post("/api/download-instagram", async (req, res) => {
   const { url } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN; 
-
   if (!url) return res.status(400).send("URL necessária.");
-  if (!APIFY_TOKEN) return res.status(500).send("Token do Apify ausente.");
+  if (!APIFY_TOKEN) return res.status(500).send("Token ausente.");
 
   try {
     const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`;
@@ -56,110 +55,72 @@ app.post("/api/download-instagram", async (req, res) => {
       "resultsType": "details",
       "searchLimit": 1
     });
-
     const item = apifyRes.data[0];
     const videoUrl = item?.videoUrl || item?.displayUrl;
-
-    if (!videoUrl) throw new Error("URL do vídeo não encontrada.");
+    if (!videoUrl) throw new Error("Vídeo não encontrado.");
 
     const fileName = `insta_${Date.now()}.mp4`;
     const filePath = path.join(uploadDir, fileName);
-
     const response = await axios({ url: videoUrl, method: "GET", responseType: "stream" });
     const writer = fs.createWriteStream(filePath);
     response.data.pipe(writer);
-
     writer.on("finish", () => {
       const publicUrl = `${req.protocol}://${req.get('host')}/uploads/${fileName}`;
       res.json({ success: true, fileName: fileName, previewUrl: publicUrl });
     });
-  } catch (error) {
-    res.status(500).send("Erro ao baixar via Apify.");
-  }
+  } catch (error) { res.status(500).send("Erro no download."); }
 });
 
-// --- ROTA 2: RENDERIZAÇÃO CLÁSSICA E ESTÁVEL ---
+// --- ROTA 2: RENDERIZAÇÃO (CLÁSSICA + PROTEÇÃO) ---
 app.post(
   "/api/render-video",
-  upload.fields([
-    { name: "baseVideo", maxCount: 1 },
-    { name: "reactionVideo", maxCount: 1 },
-  ]),
+  upload.fields([{ name: "baseVideo", maxCount: 1 }, { name: "reactionVideo", maxCount: 1 }]),
   (req, res) => {
     try {
-      console.log("🎬 Exportando versão CLÁSSICA e ESTÁVEL...");
-
       const baseObj = parseSafeJSON(req.body.base);
       const reactObj = parseSafeJSON(req.body.react);
       const textObj = parseSafeJSON(req.body.text);
 
-      const baseVideoName = req.body.baseVideoName || baseObj.fileName;
-      const baseFile = req.files?.["baseVideo"]?.[0];
-      const reactFile = req.files?.["reactionVideo"]?.[0];
+      const basePath = (req.body.baseVideoName || baseObj.fileName) ? 
+        path.join(uploadDir, req.body.baseVideoName || baseObj.fileName) : 
+        req.files?.["baseVideo"]?.[0]?.path;
+      const reactPath = req.files?.["reactionVideo"]?.[0]?.path;
 
-      const basePath = baseVideoName ? path.join(uploadDir, baseVideoName) : baseFile?.path;
-      const reactPath = reactFile?.path;
-
-      const startTime = req.body.startTime || 0; 
-      const duration = 10.5; 
-
-      if (!basePath || !fs.existsSync(basePath)) return res.status(400).send("Vídeo base não encontrado.");
-      if (!reactPath) return res.status(400).send("Vídeo da reação não enviado.");
-
-      const outputPath = path.join(uploadDir, `output_${Date.now()}.mp4`);
-      const textPath = path.join(uploadDir, `text_${Date.now()}.txt`);
-
-      const formattedText = formatTextToMultiline(textObj.value || "", 2);
-      fs.writeFileSync(textPath, formattedText, "utf8");
+      if (!basePath || !fs.existsSync(basePath) || !reactPath) {
+        return res.status(400).send("Arquivos de vídeo não encontrados.");
+      }
 
       const CANVAS_W = 720;
       const CANVAS_H = 1280;
 
-      let scaleX = 1, scaleY = 1;
-      if (req.body.editorW && req.body.editorH) {
-        scaleX = CANVAS_W / Number(req.body.editorW);
-        scaleY = CANVAS_H / Number(req.body.editorH);
-      } else { scaleX = 2; scaleY = 2; }
+      // Segurança para evitar divisões por zero ou NaN
+      const eW = parseFloat(req.body.editorW) || 360;
+      const eH = parseFloat(req.body.editorH) || 640;
+      const sX = CANVAS_W / eW;
+      const sY = CANVAS_H / eH;
 
-      let bW = makeEven((baseObj.w || 360) * scaleX);
-      let bH = makeEven((baseObj.h || 640) * scaleY);
-      let bX = Math.round((baseObj.x || 0) * scaleX);
-      let bY = Math.round((baseObj.y || 0) * scaleY);
+      const bW = makeEven((parseFloat(baseObj.w) || 360) * sX);
+      const bH = makeEven((parseFloat(baseObj.h) || 640) * sY);
+      const bX = Math.round((parseFloat(baseObj.x) || 0) * sX);
+      const bY = Math.round((parseFloat(baseObj.y) || 0) * sY);
 
-      let rW = makeEven((reactObj.w || 360) * scaleX);
-      let rH = makeEven((reactObj.h || 240) * scaleY);
-      let rX = Math.round((reactObj.x || 0) * scaleX);
-      let rY = Math.round((reactObj.y || 0) * scaleY);
+      const rW = makeEven((parseFloat(reactObj.w) || 360) * sX);
+      const rH = makeEven((parseFloat(reactObj.h) || 240) * sY);
+      const rX = Math.round((parseFloat(reactObj.x) || 0) * sX);
+      const rY = Math.round((parseFloat(reactObj.y) || 0) * sY);
 
-      let tX = textObj.x !== undefined ? Math.round(textObj.x * scaleX) : "(w-text_w)/2";
-      let tY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : 600;
-      let tS = Math.round((textObj.size || 35) * ((scaleX + scaleY) / 2));
+      const outputPath = path.join(uploadDir, `output_${Date.now()}.mp4`);
+      const textPath = path.join(uploadDir, `text_${Date.now()}.txt`);
+      fs.writeFileSync(textPath, formatTextToMultiline(textObj.value || "", 2), "utf8");
 
-      // 🔥 Linha gigante dividida em array para nunca mais ser cortada
+      const tS = Math.round((parseFloat(textObj.size) || 35) * ((sX + sY) / 2));
+      const tX = !isNaN(parseFloat(textObj.x)) ? Math.round(parseFloat(textObj.x) * sX) : "(w-text_w)/2";
+      const tY = !isNaN(parseFloat(textObj.y)) ? Math.round(parseFloat(textObj.y) * sY) : 600;
+
       const videoFilters = [
         `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg]`,
         `[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled]`,
         `[1:v]scale=${rW}:${rH}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled]`,
         `[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base]`,
         `[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both]`,
-        `[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`
-      ].join(";");
-
-      const command = `ffmpeg -y -threads 2 -ss ${startTime} -t ${duration} -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset veryfast -crf 28 -shortest -c:a aac "${outputPath}"`;
-
-      exec(command, (error, stdout, stderr) => {
-        if (error) return res.status(500).send("Erro no FFmpeg.");
-        res.download(outputPath, () => {
-          try {
-            if (fs.existsSync(reactPath)) fs.unlinkSync(reactPath);
-            if (fs.existsSync(textPath)) fs.unlinkSync(textPath);
-            if (!baseVideoName && fs.existsSync(basePath)) fs.unlinkSync(basePath);
-          } catch (e) {}
-        });
-      });
-    } catch (err) { res.status(500).send("Erro interno."); }
-  }
-);
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Reactify CLÁSSICO online na porta ${PORT}`));
+        `[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize
