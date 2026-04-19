@@ -10,10 +10,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Permite que o Lovable acesse a pasta de uploads para o Preview
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Garante que a pasta de uploads existe
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
@@ -21,7 +19,6 @@ if (!fs.existsSync(uploadDir)) {
 
 const upload = multer({ dest: "uploads/" });
 
-// --- UTILITÁRIOS ---
 const parseSafeJSON = (data) => {
   try { return data ? JSON.parse(data) : {}; } 
   catch (e) { return {}; }
@@ -32,7 +29,7 @@ const makeEven = (num) => {
   return n % 2 === 0 ? n : n + 1;
 };
 
-// --- ROTA 1: DOWNLOAD DO INSTAGRAM (APIFY) ---
+// --- ROTA 1: DOWNLOAD DO INSTAGRAM ---
 app.post("/api/download-instagram", async (req, res) => {
   const { url } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN; 
@@ -41,9 +38,7 @@ app.post("/api/download-instagram", async (req, res) => {
   if (!APIFY_TOKEN) return res.status(500).send("Configuração de API (Token) ausente.");
 
   try {
-    console.log("🚀 Solicitando Scraping ao Apify...");
     const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`;
-
     const apifyRes = await axios.post(apifyUrl, {
       "directUrls": [url.split('?')[0]],
       "resultsType": "details",
@@ -53,12 +48,11 @@ app.post("/api/download-instagram", async (req, res) => {
     const item = apifyRes.data[0];
     const videoUrl = item?.videoUrl || item?.displayUrl;
 
-    if (!videoUrl) throw new Error("URL do vídeo não encontrada no retorno.");
+    if (!videoUrl) throw new Error("URL não encontrada.");
 
     const fileName = `insta_${Date.now()}.mp4`;
     const filePath = path.join(uploadDir, fileName);
 
-    console.log("✅ Baixando vídeo para o servidor...");
     const response = await axios({ url: videoUrl, method: "GET", responseType: "stream" });
     const writer = fs.createWriteStream(filePath);
     response.data.pipe(writer);
@@ -69,12 +63,11 @@ app.post("/api/download-instagram", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Erro Apify:", error.message);
-    res.status(500).send("Erro ao processar com Apify.");
+    res.status(500).send("Erro no Apify.");
   }
 });
 
-// --- ROTA 2: RENDERIZAÇÃO FINAL (FFMPEG) ---
+// --- ROTA 2: RENDERIZAÇÃO FINAL ---
 app.post(
   "/api/render-video",
   upload.fields([
@@ -83,28 +76,38 @@ app.post(
   ]),
   (req, res) => {
     try {
-      console.log("🎬 Iniciando exportação...");
+      console.log("--- 📥 NOVA REQUISIÇÃO DE EXPORTAÇÃO ---");
+      
+      const baseObj = parseSafeJSON(req.body.base);
+      const reactObj = parseSafeJSON(req.body.react);
+      const textObj = parseSafeJSON(req.body.text);
 
+      // 🔍 Tenta pegar o nome do arquivo de dois lugares (Campo direto ou dentro do objeto base)
+      const baseVideoName = req.body.baseVideoName || baseObj.fileName;
       const baseFile = req.files?.["baseVideo"]?.[0];
-      const baseVideoName = req.body.baseVideoName; 
       const reactFile = req.files?.["reactionVideo"]?.[0];
+
+      console.log("Body baseVideoName:", req.body.baseVideoName);
+      console.log("BaseObj fileName:", baseObj.fileName);
 
       const basePath = baseVideoName ? path.join(uploadDir, baseVideoName) : baseFile?.path;
       const reactPath = reactFile?.path;
 
-      if (!basePath || !fs.existsSync(basePath)) {
-        return res.status(400).send("Vídeo base não encontrado.");
+      // Validação detalhada para o log do Render
+      if (!basePath) {
+        console.error("❌ Erro: Nenhum caminho para o vídeo base foi definido.");
+        return res.status(400).send("Vídeo base não encontrado: Nome do arquivo ausente.");
       }
-      if (!reactPath || !fs.existsSync(reactPath)) {
+      if (!fs.existsSync(basePath)) {
+        console.error(`❌ Erro: Arquivo não existe no caminho: ${basePath}`);
+        return res.status(400).send(`Vídeo base não encontrado: O arquivo ${baseVideoName} sumiu do servidor.`);
+      }
+      if (!reactPath) {
         return res.status(400).send("Vídeo da reação não enviado.");
       }
 
       const outputPath = path.join(uploadDir, `output_${Date.now()}.mp4`);
       const textPath = path.join(uploadDir, `text_${Date.now()}.txt`);
-
-      const textObj = parseSafeJSON(req.body.text);
-      const reactObj = parseSafeJSON(req.body.react);
-      const baseObj = parseSafeJSON(req.body.base);
 
       fs.writeFileSync(textPath, textObj.value || "", "utf8");
 
@@ -119,7 +122,6 @@ app.post(
         scaleX = 2; scaleY = 2;
       }
 
-      // Cálculos de dimensões (corrigidos)
       let bW = makeEven((baseObj.w || 360) * scaleX);
       let bH = makeEven((baseObj.h || 640) * scaleY);
       let bX = Math.round((baseObj.x || 0) * scaleX);
