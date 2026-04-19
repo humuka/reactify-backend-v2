@@ -19,7 +19,7 @@ app.post(
   ]),
   (req, res) => {
     try {
-      console.log("===== REQUEST RECEBIDA =====");
+      console.log("===== REQUEST =====");
       console.log("BODY:", req.body);
       console.log("FILES:", req.files);
 
@@ -27,34 +27,32 @@ app.post(
       const reactFile = req.files?.["reactionVideo"]?.[0];
 
       if (!baseFile || !reactFile) {
-        console.error("Arquivos não enviados corretamente");
         return res.status(400).send("Missing files");
       }
 
       const basePath = baseFile.path;
       const reactPath = reactFile.path;
 
-      const layout = req.body.layout || "corner";
-      const text = (req.body.text || "").replace(/'/g, "\\'");
-
       const outputPath = `output_${Date.now()}.mp4`;
 
-      // 📍 POSIÇÃO DO REACT
+      // 🎯 TEXT SAFE PARSE (CORREÇÃO PRINCIPAL)
+      const textObj = req.body.text ? JSON.parse(req.body.text) : {};
+
+      const text = (textObj.value || "").replace(/'/g, "\\'");
+      const textX = textObj.x || "(w-text_w)/2";
+      const textY = textObj.y || "h-150";
+      const textSize = textObj.size || 48;
+
+      // 📍 REACT POSITION (DEFAULT)
       let overlayPosition = "W-w-20:H-h-20";
 
-      if (layout === "center") {
-        overlayPosition = "(W-w)/2:(H-h)/2";
-      }
+      const layout = req.body.layout || "corner";
 
-      if (layout === "top") {
-        overlayPosition = "(W-w)/2:20";
-      }
+      if (layout === "center") overlayPosition = "(W-w)/2:(H-h)/2";
+      if (layout === "top") overlayPosition = "(W-w)/2:20";
+      if (layout === "bottom") overlayPosition = "(W-w)/2:H-h-20";
 
-      if (layout === "bottom") {
-        overlayPosition = "(W-w)/2:H-h-20";
-      }
-
-      // ⚡ FFMPEG OTIMIZADO PRA 512MB
+      // ⚡ FFMPEG OTIMIZADO (SEM ESTOURAR MEMÓRIA)
       const command = `
 ffmpeg -y \
 -threads 2 \
@@ -63,7 +61,7 @@ ffmpeg -y \
 [0:v]scale=720:1280:flags=fast_bilinear[base];
 [1:v]scale=240:-2[react];
 [base][react]overlay=${overlayPosition}:format=auto,
-drawtext=text='${text}':fontsize=32:fontcolor=white:box=1:boxcolor=black@0.5:x=(w-text_w)/2:y=h-120
+drawtext=text='${text}':fontsize=${textSize}:fontcolor=white:box=1:boxcolor=black@0.5:x=${textX}:y=${textY}
 " \
 -c:v libx264 -preset ultrafast -crf 28 \
 -c:a copy ${outputPath}
@@ -78,7 +76,7 @@ drawtext=text='${text}':fontsize=32:fontcolor=white:box=1:boxcolor=black@0.5:x=(
           return res.status(500).send("Erro ao gerar vídeo");
         }
 
-        console.log("Render finalizado com sucesso");
+        console.log("Render OK");
 
         res.download(outputPath, () => {
           try {
@@ -86,7 +84,7 @@ drawtext=text='${text}':fontsize=32:fontcolor=white:box=1:boxcolor=black@0.5:x=(
             fs.unlinkSync(reactPath);
             fs.unlinkSync(outputPath);
           } catch (e) {
-            console.error("Erro ao limpar arquivos:", e);
+            console.error("Cleanup error:", e);
           }
         });
       });
