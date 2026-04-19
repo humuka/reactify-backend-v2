@@ -55,30 +55,27 @@ app.post(
       let baseX = Math.round(baseObj.x || 0);
       let baseY = Math.round(baseObj.y || 0);
 
-      // 🧲 AUTO-CORRETOR DE BORDAS (Elimina a tela preta)
-      // Se a largura dos vídeos ocupa quase toda a tela, é um Split-Screen.
-      // Forçamos a matemática exata para grudar as bordas.
+      // 🧲 AUTO-CORRETOR 3.0: ESTRATÉGIA DE SOBREPOSIÇÃO (BLEED)
       if (reactW >= CANVAS_W - 10 && baseW >= CANVAS_W - 10) {
         if (reactY <= baseY) {
           // Split Topo
           reactY = 0;
-          baseY = reactH;
-          baseH = CANVAS_H - reactH;
+          baseY = reactH - 4; // Puxa o dragão 4px para cima, engolindo a linha preta
+          baseH = (CANVAS_H - reactH) + 10; // Estica o dragão 10px para baixo para compensar
         } else {
           // Split Baixo
           baseY = 0;
-          reactY = baseH;
-          reactH = CANVAS_H - baseH;
+          reactY = baseH - 4; // Puxa a Liv 4px para cima
+          reactH = (CANVAS_H - baseH) + 10;
         }
       }
 
-      // 📝 TEXTO EM NEGRITO
+      // 📝 TEXTO FIEL AO LOVABLE
       const textVal = (textObj.value || "").replace(/'/g, "\u2019").replace(/:/g, "\\:");
       let textX = textObj.x !== undefined ? Math.round(textObj.x) : "(w-text_w)/2";
       let textY = textObj.y !== undefined ? Math.round(textObj.y) : reactH - 30;
-      let textSize = Math.round(textObj.size || 65); // Aumentei o tamanho base um pouco
+      let textSize = Math.round(textObj.size || 50);
 
-      // Adicionado fontfile apontando para a versão BOLD (Negrito) nativa do servidor Render e borderw=5
       const videoFilters = `
         color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];
         [0:v]scale=${baseW}:${baseH}:force_original_aspect_ratio=increase,crop=${baseW}:${baseH}:(in_w-${baseW})/2:(in_h-${baseH})/2[base_scaled];
