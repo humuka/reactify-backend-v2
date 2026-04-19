@@ -66,7 +66,7 @@ app.post("/api/download-instagram", async (req, res) => {
   }
 });
 
-// --- ROTA 2: PESQUISA DE VÍDEOS EM ALTA (MODO PROFUNDO) ---
+// --- ROTA 2: PESQUISA DE VÍDEOS EM ALTA (CORRIGIDA) ---
 app.post("/api/search-instagram", async (req, res) => {
   const { keyword } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN;
@@ -76,49 +76,65 @@ app.post("/api/search-instagram", async (req, res) => {
 
   try {
     const safeKeyword = keyword.replace(/[#\s]+/g, ''); 
-    console.log(`🔍 Buscando tendências para #${safeKeyword} (Modo Profundo)...`);
+    console.log(`🔍 Buscando tendências para a hashtag: #${safeKeyword}...`);
     
-    const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=120`;
+    // O timeout pode ser rápido de novo (60s)
+    const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`;
 
-    // 🔥 O SEGREDO ESTÁ AQUI: "resultsType": "details"
-    // Isso obriga o Apify a entrar em cada post e capturar o arquivo MP4 real (.videoUrl)
     const apifyRes = await axios.post(apifyUrl, {
       "search": safeKeyword,
       "searchType": "hashtag",
-      "resultsType": "details", 
-      "searchLimit": 15 // 15 é o suficiente para achar pelo menos 6 vídeos rápido
+      "searchLimit": 30 // 30 é mais que suficiente agora
     });
 
-    const items = apifyRes.data;
-    
-    if (!items || items.length === 0) {
-      return res.status(404).send("Nenhuma postagem detalhada encontrada.");
+    // 🔥 O SEGREDO: O Apify coloca TUDO dentro do primeiro item (a "Caixa" da hashtag)
+    const hashtagData = apifyRes.data[0];
+
+    if (!hashtagData) {
+      return res.status(404).send("Hashtag não encontrada no Instagram.");
     }
 
-    // Agora o filtro é super simples: Se tem videoUrl, é vídeo!
-    const videos = items
-      .filter(item => item.videoUrl) 
+    // Abre as gavetas de "Top Posts" e "Latest Posts" e junta tudo
+    let allPosts = [];
+    if (hashtagData.topPosts && hashtagData.topPosts.length > 0) {
+        allPosts = allPosts.concat(hashtagData.topPosts);
+    }
+    if (hashtagData.latestPosts && hashtagData.latestPosts.length > 0) {
+        allPosts = allPosts.concat(hashtagData.latestPosts);
+    }
+
+    // Se por acaso vier direto na raiz
+    if (allPosts.length === 0 && apifyRes.data.length > 1) {
+        allPosts = apifyRes.data;
+    }
+
+    console.log(`📦 Encontramos ${allPosts.length} posts na hashtag.`);
+
+    // Agora sim! Filtramos os que são vídeo.
+    // Observação: Não precisamos do .mp4 aqui, só da URL do post. Quando o Lovable 
+    // clicar no vídeo, ele manda essa URL pra Rota 1, e ela sim extrai o .mp4!
+    const videos = allPosts
+      .filter(post => post.isVideo === true || post.type === "Video")
       .slice(0, 6)
-      .map(item => ({
-        id: item.id,
-        url: item.url, 
-        thumbnailUrl: item.displayUrl, 
-        videoUrl: item.videoUrl, 
-        views: item.videoViewCount || item.viewCount || 0,
-        likes: item.likesCount || 0,
-        caption: item.caption ? item.caption.substring(0, 70) + '...' : ''
+      .map(post => ({
+        id: post.id,
+        url: post.url, // O link do post (ex: instagram.com/p/123)
+        thumbnailUrl: post.displayUrl, 
+        views: post.videoViewCount || post.viewCount || 0,
+        likes: post.likesCount || 0,
+        caption: post.caption ? post.caption.substring(0, 70) + '...' : ''
       }));
 
-    console.log(`🎬 Sucesso! Extraímos ${videos.length} links MP4 reais.`);
+    console.log(`🎬 Filtramos os ${videos.length} melhores Reels!`);
 
     if (videos.length === 0) {
-      return res.status(404).send("Busca concluída, mas nenhum dos posts recentes era vídeo (Reels).");
+      return res.status(404).send("Encontramos a hashtag, mas não havia vídeos.");
     }
 
     res.json({ success: true, results: videos });
   } catch (error) {
     console.error("❌ Erro na busca:", error.message);
-    res.status(500).send("Erro no servidor do Apify.");
+    res.status(500).send("Erro de comunicação com o Apify.");
   }
 });
 
