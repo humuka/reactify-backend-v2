@@ -10,7 +10,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔓 Permite que o Lovable acesse os vídeos para o Preview
+// Permite que o Lovable acesse a pasta de uploads para o Preview
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Garante que a pasta de uploads existe
@@ -32,17 +32,16 @@ const makeEven = (num) => {
   return n % 2 === 0 ? n : n + 1;
 };
 
-// --- ROTA 1: DOWNLOAD DO INSTAGRAM (VIA APIFY) ---
+// --- ROTA 1: DOWNLOAD DO INSTAGRAM (APIFY) ---
 app.post("/api/download-instagram", async (req, res) => {
   const { url } = req.body;
   const APIFY_TOKEN = process.env.APIFY_TOKEN; 
 
   if (!url) return res.status(400).send("URL necessária.");
-  if (!APIFY_TOKEN) return res.status(500).send("Configuração de API ausente no servidor.");
+  if (!APIFY_TOKEN) return res.status(500).send("Configuração de API (Token) ausente.");
 
   try {
     console.log("🚀 Solicitando Scraping ao Apify...");
-
     const apifyUrl = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`;
 
     const apifyRes = await axios.post(apifyUrl, {
@@ -54,31 +53,28 @@ app.post("/api/download-instagram", async (req, res) => {
     const item = apifyRes.data[0];
     const videoUrl = item?.videoUrl || item?.displayUrl;
 
-    if (!videoUrl) throw new Error("URL do vídeo não encontrada no retorno do Apify.");
+    if (!videoUrl) throw new Error("URL do vídeo não encontrada no retorno.");
 
     const fileName = `insta_${Date.now()}.mp4`;
     const filePath = path.join(uploadDir, fileName);
 
-    console.log("✅ Link obtido. Baixando para o servidor...");
-
+    console.log("✅ Baixando vídeo para o servidor...");
     const response = await axios({ url: videoUrl, method: "GET", responseType: "stream" });
     const writer = fs.createWriteStream(filePath);
     response.data.pipe(writer);
 
     writer.on("finish", () => {
-      // Retorna a URL de preview para o Lovable mostrar o vídeo no editor
       const publicUrl = `${req.protocol}://${req.get('host')}/uploads/${fileName}`;
-      console.log("🔥 Download concluído:", fileName);
       res.json({ success: true, fileName: fileName, previewUrl: publicUrl });
     });
 
   } catch (error) {
     console.error("Erro Apify:", error.message);
-    res.status(500).send("Falha ao processar link com Apify.");
+    res.status(500).send("Erro ao processar com Apify.");
   }
 });
 
-// --- ROTA 2: RENDERIZAÇÃO DO VÍDEO FINAL ---
+// --- ROTA 2: RENDERIZAÇÃO FINAL (FFMPEG) ---
 app.post(
   "/api/render-video",
   upload.fields([
@@ -87,30 +83,20 @@ app.post(
   ]),
   (req, res) => {
     try {
-      console.log("🎬 --- INICIANDO EXPORTAÇÃO ---");
+      console.log("🎬 Iniciando exportação...");
 
-      // 1. Captura as fontes (Upload ou Nome do arquivo já no servidor)
       const baseFile = req.files?.["baseVideo"]?.[0];
       const baseVideoName = req.body.baseVideoName; 
       const reactFile = req.files?.["reactionVideo"]?.[0];
 
-      // 🔍 DEBUG LOGS para você ver no painel do Render se algo faltar
-      console.log("Arquivo Base (Upload):", baseFile ? "Recebido" : "Não enviado");
-      console.log("Nome do Vídeo Base (Link):", baseVideoName || "Não enviado");
-      console.log("Arquivo Reação (Upload):", reactFile ? "Recebido" : "Não enviado");
-
-      // 2. Define os caminhos reais no disco
       const basePath = baseVideoName ? path.join(uploadDir, baseVideoName) : baseFile?.path;
       const reactPath = reactFile?.path;
 
-      // 3. Validação de segurança
       if (!basePath || !fs.existsSync(basePath)) {
-        console.error("❌ Erro: Vídeo base não localizado no servidor.");
-        return res.status(400).send("Vídeos ausentes: O vídeo base (dragão) não foi encontrado.");
+        return res.status(400).send("Vídeo base não encontrado.");
       }
       if (!reactPath || !fs.existsSync(reactPath)) {
-        console.error("❌ Erro: Vídeo da reação não localizado.");
-        return res.status(400).send("Vídeos ausentes: O vídeo da reação (Liv) não foi enviado.");
+        return res.status(400).send("Vídeo da reação não enviado.");
       }
 
       const outputPath = path.join(uploadDir, `output_${Date.now()}.mp4`);
@@ -133,10 +119,40 @@ app.post(
         scaleX = 2; scaleY = 2;
       }
 
-      // Medidas dos vídeos (Base e Reação)
+      // Cálculos de dimensões (corrigidos)
       let bW = makeEven((baseObj.w || 360) * scaleX);
       let bH = makeEven((baseObj.h || 640) * scaleY);
       let bX = Math.round((baseObj.x || 0) * scaleX);
       let bY = Math.round((baseObj.y || 0) * scaleY);
 
-      let rW = makeEven((reactObj.w || 360)
+      let rW = makeEven((reactObj.w || 360) * scaleX);
+      let rH = makeEven((reactObj.h || 240) * scaleY);
+      let rX = Math.round((reactObj.x || 0) * scaleX);
+      let rY = Math.round((reactObj.y || 0) * scaleY);
+
+      let tX = textObj.x !== undefined ? Math.round(textObj.x * scaleX) : "(w-text_w)/2";
+      let tY = textObj.y !== undefined ? Math.round(textObj.y * scaleY) : 600;
+      let tS = Math.round((textObj.size || 35) * ((scaleX + scaleY) / 2));
+
+      const videoFilters = `color=c=black:s=${CANVAS_W}x${CANVAS_H}[bg];[0:v]scale=${bW}:${bH}:force_original_aspect_ratio=increase,crop=${bW}:${bH}[base_scaled];[1:v]scale=${rW}:${rH}:force_original_aspect_ratio=increase,crop=${rW}:${rH}[react_scaled];[bg][base_scaled]overlay=${bX}:${bY}:shortest=1[bg_base];[bg_base][react_scaled]overlay=${rX}:${rY}[vid_both];[vid_both]drawtext=textfile='${textPath.replace(/\\/g, "/")}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:x=${tX}:y=${tY}:fontsize=${tS}:fontcolor=white:borderw=5:bordercolor=black[final]`.replace(/\s+/g, "");
+
+      const command = `ffmpeg -y -threads 2 -i "${basePath}" -i "${reactPath}" -filter_complex "${videoFilters}" -map "[final]" -map "0:a?" -map "1:a?" -c:v libx264 -preset veryfast -crf 28 -shortest -c:a aac "${outputPath}"`;
+
+      exec(command, (error, stdout, stderr) => {
+        if (error) return res.status(500).send("Erro no FFmpeg.");
+        res.download(outputPath, () => {
+          try {
+            if (fs.existsSync(reactPath)) fs.unlinkSync(reactPath);
+            if (fs.existsSync(textPath)) fs.unlinkSync(textPath);
+            if (!baseVideoName && fs.existsSync(basePath)) fs.unlinkSync(basePath);
+          } catch (e) {}
+        });
+      });
+    } catch (err) {
+      res.status(500).send("Erro interno.");
+    }
+  }
+);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
